@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Escrow dispute handling now verifies post-transaction signer configuration is platform-only (platform weight 3; adopter and owner weights 0) with thresholds low=0, medium=2, high=2 (`src/escrow/escrow-manager.ts`)
+
 ### Added
 - `getMinimumReserve()` utility to calculate the minimum XLM balance required for an account based on signers, offers, and trustlines (`src/accounts/keypair.ts`)
 - `Percentage` branded type: compile-time guarantee that a number is validated to [0, 100] (`src/types/escrow.ts`)

@@ -158,15 +158,88 @@ describe('EscrowManager', () => {
   });
 
   describe('handleDispute', () => {
-    it('delegates to transactionManager.handleDispute', async () => {
+    it('verifies signer configuration after dispute handling', async () => {
       const deps = createMockDeps();
+      (deps.horizonClient.getAccountInfo as jest.Mock)
+        .mockResolvedValueOnce({
+          accountId: VALID_PUBLIC_KEY,
+          balance: '100.0000000',
+          signers: [
+            { publicKey: VALID_PUBLIC_KEY, weight: 1 },
+            { publicKey: `G${'B'.repeat(55)}`, weight: 1 },
+            { publicKey: `G${'C'.repeat(55)}`, weight: 1 },
+          ],
+          thresholds: { low: 1, medium: 2, high: 2 },
+          sequenceNumber: '1',
+          exists: true,
+        })
+        .mockResolvedValueOnce({
+          accountId: VALID_PUBLIC_KEY,
+          balance: '100.0000000',
+          signers: [
+            { publicKey: VALID_PUBLIC_KEY, weight: 3 },
+            { publicKey: `G${'B'.repeat(55)}`, weight: 0 },
+            { publicKey: `G${'C'.repeat(55)}`, weight: 0 },
+          ],
+          thresholds: { low: 0, medium: 2, high: 2 },
+          sequenceNumber: '2',
+          exists: true,
+        });
+
       const manager = new EscrowManager(deps);
       const params = { escrowAccountId: VALID_PUBLIC_KEY };
-      await manager.handleDispute(params);
+      const result = await manager.handleDispute(params);
+
       expect(deps.transactionManager.handleDispute).toHaveBeenCalledWith(
         params,
         VALID_SECRET_KEY,
       );
+      expect(deps.horizonClient.getAccountInfo).toHaveBeenNthCalledWith(1, VALID_PUBLIC_KEY);
+      expect(deps.horizonClient.getAccountInfo).toHaveBeenNthCalledWith(2, VALID_PUBLIC_KEY);
+      expect(result.platformOnlyMode).toBe(true);
+    });
+
+    it('throws ValidationError for invalid escrowAccountId', async () => {
+      const manager = new EscrowManager(createMockDeps());
+      await expect(manager.handleDispute({ escrowAccountId: 'bad' })).rejects.toThrow(
+        ValidationError,
+      );
+    });
+
+    it('throws when post-dispute signer configuration is not platform-only', async () => {
+      const deps = createMockDeps();
+      (deps.horizonClient.getAccountInfo as jest.Mock)
+        .mockResolvedValueOnce({
+          accountId: VALID_PUBLIC_KEY,
+          balance: '100.0000000',
+          signers: [
+            { publicKey: VALID_PUBLIC_KEY, weight: 1 },
+            { publicKey: `G${'B'.repeat(55)}`, weight: 1 },
+            { publicKey: `G${'C'.repeat(55)}`, weight: 1 },
+          ],
+          thresholds: { low: 1, medium: 2, high: 2 },
+          sequenceNumber: '1',
+          exists: true,
+        })
+        .mockResolvedValueOnce({
+          accountId: VALID_PUBLIC_KEY,
+          balance: '100.0000000',
+          signers: [
+            { publicKey: VALID_PUBLIC_KEY, weight: 3 },
+            { publicKey: `G${'B'.repeat(55)}`, weight: 1 },
+            { publicKey: `G${'C'.repeat(55)}`, weight: 0 },
+          ],
+          thresholds: { low: 0, medium: 2, high: 2 },
+          sequenceNumber: '2',
+          exists: true,
+        });
+
+      const manager = new EscrowManager(deps);
+      await expect(
+        manager.handleDispute({ escrowAccountId: VALID_PUBLIC_KEY }),
+      ).rejects.toMatchObject({
+        code: 'DISPUTE_SIGNER_CONFIG_INVALID',
+      });
     });
   });
 

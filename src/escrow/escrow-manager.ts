@@ -1,3 +1,4 @@
+import { Keypair } from '@stellar/stellar-sdk';
 import { SdkError, ValidationError } from '../utils/errors';
 import { isValidPublicKey, isValidAmount } from '../utils/validation';
 import { EscrowStatus } from '../types/escrow';
@@ -9,7 +10,7 @@ import type {
   DisputeParams,
   DisputeResult,
 } from '../types/escrow';
-import type { BalanceInfo } from '../types/network';
+import type { AccountInfo, BalanceInfo } from '../types/network';
 import type { SubmitResult } from '../types/transaction';
 import type { EscrowManagerDeps } from './types';
 
@@ -88,8 +89,26 @@ export class EscrowManager {
    * @returns Dispute result with freeze details.
    */
   async handleDispute(params: DisputeParams): Promise<DisputeResult> {
+    if (!isValidPublicKey(params.escrowAccountId)) {
+      throw new ValidationError('escrowAccountId', 'Invalid escrow account ID');
+    }
+
     try {
-      return await this.deps.transactionManager.handleDispute(params, this.deps.masterSecretKey);
+      await this.deps.horizonClient.getAccountInfo(params.escrowAccountId);
+      const result = await this.deps.transactionManager.handleDispute(
+        params,
+        this.deps.masterSecretKey,
+      );
+      const updatedConfig = await this.deps.horizonClient.getAccountInfo(params.escrowAccountId);
+
+      if (!this.isPlatformOnlySignerConfig(updatedConfig)) {
+        throw new SdkError(
+          `Dispute signer verification failed for ${params.escrowAccountId}`,
+          'DISPUTE_SIGNER_CONFIG_INVALID',
+        );
+      }
+
+      return result;
     } catch (err) {
       throw this.wrap('handleDispute', err);
     }
@@ -140,5 +159,31 @@ export class EscrowManager {
       `EscrowManager.${method} failed: ${message}`,
       'ESCROW_MANAGER_ERROR',
     );
+  }
+
+  private isPlatformOnlySignerConfig(accountInfo: AccountInfo): boolean {
+    const activeSigners = accountInfo.signers.filter(signer => signer.weight > 0);
+    if (activeSigners.length !== 1) return false;
+
+    const [platformSigner] = activeSigners;
+    if (!platformSigner || platformSigner.weight !== 3) return false;
+
+    const { low, medium, high } = accountInfo.thresholds;
+    if (low !== 0 || medium !== 2 || high !== 2) return false;
+
+    const platformPublicKey = this.getPlatformPublicKey();
+    if (platformPublicKey && platformSigner.publicKey !== platformPublicKey) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private getPlatformPublicKey(): string | undefined {
+    try {
+      return Keypair.fromSecret(this.deps.masterSecretKey).publicKey();
+    } catch {
+      return undefined;
+    }
   }
 }
